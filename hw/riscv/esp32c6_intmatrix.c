@@ -127,7 +127,7 @@ static void esp32c6_intmatrix_irq_prio_changed(ESP32C6IntMatrixState* s, uint32_
 
     if (accept && priority >= s->irq_thres && BIT_SET(s->irq_pending, line)) {
         /* No need to clear the pending bit here. As soon as the interrupt source will be ACK by the
-         * software, its level will be update, as well as its pending state. */
+         * software, its level will be updated, as well as its pending state. */
         esp32c6_do_int(s, line);
     }
 }
@@ -143,7 +143,8 @@ static void esp32c6_intmatrix_core_prio_changed(ESP32C6IntMatrixState* s, uint64
         uint_fast32_t line = 0;
 
         /* Clear all the interrupts that have a lower priority than the new CPU threshold */
-        for (uint_fast32_t i = 1; i <= ESP32C6_CPU_INT_COUNT; i++) {
+        // TODO: Don't use a for loop, the non CLINT interrupts are not contiguous
+        for (uint_fast32_t i = 1; i <= ESP32C6_CPU_INT_MAX; i++) {
 
             const uint64_t line_prio = s->irq_prio[i];
             if (line_prio < new_cpu_priority) {
@@ -157,7 +158,8 @@ static void esp32c6_intmatrix_core_prio_changed(ESP32C6IntMatrixState* s, uint64
         }
 
         /* Look for the highest priority pending interrupt */
-        for (uint_fast32_t i = 1; i <= ESP32C6_CPU_INT_COUNT; i++) {
+        // TODO: Don't use a for loop, the non CLINT interrupts are not contiguous
+        for (uint_fast32_t i = 1; i <= ESP32C6_CPU_INT_MAX; i++) {
             const int64_t line_prio = (int64_t) s->irq_prio[i];
             if (BIT_SET(pending, i) && line_prio > priority) {
                 priority = line_prio;
@@ -251,42 +253,62 @@ static uint64_t esp32c6_intmatrix_prio_read(void* opaque, hwaddr addr, unsigned 
     const uint32_t index = addr / sizeof(uint32_t);
     uint32_t r = 0;
 
-    if (index < ESP32C6_INT_MATRIX_INPUTS) {
-        r = s->irq_map[index];
-    } else if (index >= ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_START && index < ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_END) {
-        /* Interrupts start at 1, omit the first entry */
-        const uint32_t line = index - ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_START + 1;
-        r = s->irq_prio[line];
-    } else if (index == ESP32C6_INTMATRIX_IO_THRESH_REG) {
-        r = s->irq_thres;
-    }  else if (index == ESP32C6_INTMATRIX_IO_ENABLE_REG) {
+    if (index == ESP32C6_INTPRI_CORE0_CPU_INT_ENABLE_REG) {
         r = s->irq_enabled;
-    } else if (index == ESP32C6_INTMATRIX_IO_TYPE_REG) {
+    } else if (index == ESP32C6_INTPRI_CORE0_CPU_INT_TYPE_REG) {
+        r = 0; /* by default assume the interrupt to be of type "level" and not "edge" */
+    } else if (index == ESP32C6_INTPRI_CORE0_CPU_INT_EIP_STATUS_REG) {
+        warn_report("[INTMATRIX] Unsupported read to ESP32C6_INTPRI_CORE0_CPU_INT_EIP_STATUS_REG\n");
         r = 0;
-    } else {
+    }
+    else if (index >= ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_START && index <= ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_END) {
+        /* Here interrupts don't start at 1 but at 0, and interrupts 0,3,4,7 are actually CLINT so they have
+           static priority
+        */
+       /* From ...PRIO_START exclude the 0th, 3rd, 4th and 7th register (CLINT interrupts)*/
+       if (index != ESP32C6_INTPRI_CORE0_CPU_INT_PRI_00_REG &&
+           index != ESP32C6_INTPRI_CORE0_CPU_INT_PRI_03_REG &&
+           index != ESP32C6_INTPRI_CORE0_CPU_INT_PRI_04_REG &&
+           index != ESP32C6_INTPRI_CORE0_CPU_INT_PRI_07_REG) {
+            const uint32_t line = index - ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_START;
+            r = s->irq_prio[line];
+        }
+        else {
+            warn_report("[INTMATRIX] Unsupported read from a CLINT interrupt register\n");
+            r = 0;
+        }
+    } else if (index == ESP32C6_INTPRI_CORE0_CPU_INT_THRESH_REG) {
+        r = s->irq_thres;
+    } else if (index == ESP32C6_INTPRI_CORE0_CPU_INT_CLEAR_REG) {
+        warn_report("[INTMATRIX] Unsupported read to ESP32C6_INTPRI_CORE0_CPU_INT_CLEAR_REG\n");
+        r = 0;
+    } else if (index >= ESP32C6_INTPRI_CPU_INTR_FROM_CPU_1_REG && 
+               index <= ESP32C6_INTPRI_CPU_INTR_FROM_CPU_4_REG) {
+        warn_report("[INTMATRIX] Unsupported read to ESP32C6_INTPRI_CPU_INTR_FROM_CPU_X_REG\n");
+        r = 0;
+    } else if (index == ESP32C6_INTPRI_DATE_REG) {
+        r = 0x22031100;
+    }
+    else {
 #if INTMATRIX_WARNING
         /* Other registers are not supported yet */
         warn_report("[INTMATRIX] Unsupported read to %08lx\n", addr);
 #endif
     }
-
     return r;
 }
 
 static void esp32c6_intmatrix_write(void* opaque, hwaddr addr, uint64_t value, unsigned int size)
 {
     ESP32C6IntMatrixState *s = ESP32C6_INTMATRIX(opaque);
-
     const uint32_t index = addr / sizeof(uint32_t);
 
     if (index < ESP32C6_INT_MATRIX_INPUTS) {
-
+        /* There are 5 least significant bits to set the CPU interrupt id*/
         s->irq_map[index] = (value & 0x1f);
 #if INTMATRIX_DEBUG
         info_report("\x1b[31m[INTMATRIX] Mapping interrupt %d to CPU line %d\x1b[0m\n", index, s->irq_map[index]);
 #endif
-
-
     } else if (index == ESP32C6_INTMTX_CORE0_INT_STATUS_0_REG) {
         warn_report("[INTMATRIX] Unsupported write to ESP32C6_INTMTX_CORE0_INT_STATUS_0_REG\n");
     } else if (index == ESP32C6_INTMTX_CORE0_INT_STATUS_1_REG) {
@@ -308,15 +330,90 @@ static void esp32c6_intmatrix_prio_write(void* opaque, hwaddr addr, uint64_t val
     ESP32C6IntMatrixState *s = ESP32C6_INTMATRIX(opaque);
     const uint32_t index = addr / sizeof(uint32_t);
 
-    if (index >= ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_START && index < ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_END) {
-        /* Interrupts start at 1, omit the first entry */
-        const uint32_t line = index - ESP32C6_INTMATRIX_IO_PRIO_START + 1;
-        s->irq_prio[line] = value & 0xf;
+    if (index == ESP32C6_INTPRI_CORE0_CPU_INT_ENABLE_REG) {
+        /* Check if any bit has changed status */
+        uint64_t prev = s->irq_enabled;
+        s->irq_enabled = value;
+        /* Check which interrupt/bit changed
+         * Interrupts starts at 1, so we need to count up to ESP32C3_CPU_INT_COUNT */
+        for (int i = 0; i <= ESP32C6_CPU_INT_MAX; i++) {
+            /* Exclude the CLINT interrupts, for which we don't choose
+               the "enabled" property. See 1.6.2 of the technical reference */
+            if (i != 0 && i != 3 && i != 4 && i != 7) {
+                const int new_st = value & BIT(i);
+                const int old_st = prev  & BIT(i);
+                if (new_st != old_st) {
+                    esp32c6_intmatrix_irq_status_changed(s, i, new_st ? 1 : 0);
+                }
+            } else {
+                /* WARNING*/
+                /* The CLINT interrupts are always enabled, so we don't need to
+                   check their status */
+                /* This forced set to 1 could be a BIG MISTAKE*/
+                s->irq_enabled |= BIT(i);
+            }
+        }
+        /*
+           - An M mode interrupt (external or local) further needs to 
+              be unmasked at core level by setting the
+              corresponding bit in mie CSR.
+           - A U mode interrupt (external or local) further needs to 
+              be unmasked at core level by setting the
+              corresponding bits in uie CSR.
+        */
+       /* TODO: Support for M and U mode
+       */
+    } else if (index == ESP32C6_INTPRI_CORE0_CPU_INT_TYPE_REG) {
+        if (value != 0) {
+            warn_report("[INTMATRIX] Edge-triggered interrupts not supported\n");
+        } else {
+            warn_report("[INTMATRIX] Unsupported write to %08lx (%08lx)\n", addr, value);
+        }
+    } else if (index == ESP32C6_INTPRI_CORE0_CPU_INT_EIP_STATUS_REG) {
+        warn_report("[INTMATRIX] Unsupported write to READ ONLY ESP32C6_INTPRI_CORE0_CPU_INT_EIP_STATUS_REG\n");
+    } else if (index >= ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_START && index <= ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_END) {
+        /* There are 4 least significant bits reserved to set the priority value*/
+        const uint8_t priority = value & 0xf;
+        /* Interrupts start from 0 here*/
+        const uint32_t line = (index - ESP32C6_INTPRI_CORE0_CPU_INT_PRIO_START);
+        /* Exclude CLINT interrupts*/
+        if (line != 0 && line != 3 && line != 4 && line != 7) {
+            s->irq_prio[line] = priority;
+            esp32c6_intmatrix_irq_prio_changed(s, line, priority);
+        } else {
+            warn_report("[INTMATRIX] Unsupported write to CLINT interrupt register\n");
+        }
+    } else if (index == ESP32C6_INTPRI_CORE0_CPU_INT_THRESH_REG) {
+        const uint8_t priority = value & 0xf;
+        /**
+         * If the new priority is the same as the former one, nothing must be done.
+         * Else, this could result in an infinite loop. Let's say we have an interrupt source
+         * that is mapped to a CPU line, its threshold is 2, the CPU threshold is 3.
+         * When the interrupt source is asserted, no interrupt is triggered, because the line's
+         * priority is lower than the threshold but the its pending bit is set .
+         * As soon as the threshold is lowered to 2 or 1, the interrupt will be triggered because
+         * its pending bit is set.
+         * NOTE THAT THE PENDING BIT IS STILL SET BECAUSE THE SOURCE IS STILL ASSERTED!
+         * As such, if the CPU sets the threshold to the same value, the function
+         * `esp32c3_intmatrix_core_prio_changed` called below would re-schedule the same interrupt.
+         */
+        if (priority != s->irq_thres) {
+            s->irq_thres = priority;
+            esp32c6_intmatrix_core_prio_changed(s, priority);
+            info_report("\x1b[31m[INTMATRIX] Setting CPU IRQ threshold to %d\x1b[0m", priority);
+        }
+    } else if (index == ESP32C6_INTPRI_CORE0_CPU_INT_CLEAR_REG) {
+        warn_report("[INTMATRIX] Unsupported write to ESP32C6_INTPRI_CORE0_CPU_INT_CLEAR_REG\n");
+    } else if (index >= ESP32C6_INTPRI_CPU_INTR_FROM_CPU_1_REG && 
+               index <= ESP32C6_INTPRI_CPU_INTR_FROM_CPU_4_REG) {
+        warn_report("[INTMATRIX] Unsupported write to ESP32C6_INTPRI_CPU_INTR_FROM_CPU_X_REG\n");
+    } else if (index == ESP32C6_INTPRI_DATE_REG) {
+        warn_report("[INTMATRIX] Unsupported write to READ ONLY ESP32C6_INTPRI_DATE_REG\n");
     } else {
 #if INTMATRIX_WARNING
         /* Other registers are not supported yet */
-        warn_report("[INTMATRIX] Unsupported read to %08lx\n", addr);
-#endif
+        warn_report("[INTMATRIX] Unsupported write to %08lx (%08lx)\n", addr, value);
+#endif 
     }
 }
 
@@ -344,7 +441,8 @@ static void esp32c6_intmatrix_reset_hold(Object *obj, ResetType type)
     s->irq_pending = 0;
     s->irq_levels = 0;
     s->irq_enabled = 0;
-    for (int i = 0; i <= ESP32C6_CPU_INT_COUNT; i++) {
+    // TODO: Don't use a for loop, the non CLINT interrupts are not contiguous
+    for (int i = 0; i <= ESP32C6_CPU_INT_MAX; i++) {
         qemu_irq_lower(s->out_irqs[i]);
     }
 
@@ -380,7 +478,7 @@ static void esp32c6_intmatrix_init(Object *obj)
     sysbus_init_mmio(sbd, &s->iomem_prio);
 
     qdev_init_gpio_in(DEVICE(s), esp32c6_intmatrix_irq_handler, ESP32C6_INT_MATRIX_INPUTS);
-    qdev_init_gpio_out_named(DEVICE(s), s->out_irqs, ESP32C6_INT_MATRIX_OUTPUT_NAME, ESP32C6_CPU_INT_COUNT + 1);
+    qdev_init_gpio_out_named(DEVICE(s), s->out_irqs, ESP32C6_INT_MATRIX_OUTPUT_NAME, ESP32C6_CPU_INT_MAX + 1);
 }
 
 

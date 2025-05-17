@@ -59,6 +59,12 @@
 
 #define ESP32C3_INTMATRIX_IO_THRESH_REG (0x194 / sizeof(uint32_t))
 
+/* TODO: it might be useful to add support for
+    - INTERRUPT_CORE0_CPU_INT_EIP_STATUS_REG (pending)
+    - INTERRUPT_CORE0_CPU_INT_CLEAR_REG 
+    (see page 210 of the ESP32-C3 Technical Reference Manual, Chapter 8.4)
+  */
+
 
 /* Bit value for the type of interrupt trigger  */
 #define ESP322C3_INTMATRIX_TRIG_LEVEL   0
