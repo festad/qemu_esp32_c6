@@ -143,9 +143,11 @@ static void esp32c6_intmatrix_core_prio_changed(ESP32C6IntMatrixState* s, uint64
         uint_fast32_t line = 0;
 
         /* Clear all the interrupts that have a lower priority than the new CPU threshold */
-        // TODO: Don't use a for loop, the non CLINT interrupts are not contiguous
-        for (uint_fast32_t i = 1; i <= ESP32C6_CPU_INT_MAX; i++) {
-
+        for (uint_fast32_t i = 0; i < ESP32C6_CPU_INT_MAX; i++) {
+            /* Exclude CLINT interrupts*/
+            if (i == 0 || i == 3 || i == 4 || i == 7) {
+                continue;
+            }
             const uint64_t line_prio = s->irq_prio[i];
             if (line_prio < new_cpu_priority) {
                 CLEAR_BIT(pending, i);
@@ -158,8 +160,11 @@ static void esp32c6_intmatrix_core_prio_changed(ESP32C6IntMatrixState* s, uint64
         }
 
         /* Look for the highest priority pending interrupt */
-        // TODO: Don't use a for loop, the non CLINT interrupts are not contiguous
-        for (uint_fast32_t i = 1; i <= ESP32C6_CPU_INT_MAX; i++) {
+        for (uint_fast32_t i = 0; i < ESP32C6_CPU_INT_MAX; i++) {
+            /* Exclude CLINT interrupts*/
+            if (i == 0 || i == 3 || i == 4 || i == 7) {
+                continue;
+            }
             const int64_t line_prio = (int64_t) s->irq_prio[i];
             if (BIT_SET(pending, i) && line_prio > priority) {
                 priority = line_prio;
@@ -441,8 +446,12 @@ static void esp32c6_intmatrix_reset_hold(Object *obj, ResetType type)
     s->irq_pending = 0;
     s->irq_levels = 0;
     s->irq_enabled = 0;
-    // TODO: Don't use a for loop, the non CLINT interrupts are not contiguous
-    for (int i = 0; i <= ESP32C6_CPU_INT_MAX; i++) {
+    
+    for (int i = 0; i < ESP32C6_CPU_INT_MAX; i++) {
+        /* Exclude CLINT interrupts */
+        if (i == 0 || i == 3 || i == 4 || i == 7) {
+            continue;
+        }
         qemu_irq_lower(s->out_irqs[i]);
     }
 
