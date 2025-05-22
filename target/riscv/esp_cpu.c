@@ -130,6 +130,13 @@ static void esp_cpu_register_mie_callback(EspRISCVCPU *env, EspIntEnableCallback
     env->mie_enabled_opaque = opaque;
 }
 
+static void esp_cpu_register_uie_callback(EspRISCVCPU *env, EspIntEnableCallback callback, void* opaque)
+{
+    assert(env != NULL);
+    env->uie_enabled_callback = callback;
+    env->uie_enabled_opaque = opaque;
+}
+
 riscv_csr_operations esp_cpu_csr_ops = {
     .predicate = esp_cpu_csr_predicate,
     .read = esp_cpu_csr_read,
@@ -145,6 +152,10 @@ bool esp_cpu_accept_interrupts(EspRISCVCPU *cpu)
     /* Get the MIE bit out of the MSTATUS register */
     CPURISCVState *env = &cpu->parent_obj.env;
     const bool mie = (riscv_csr_read(env, CSR_MSTATUS) & MSTATUS_MIE) != 0;
+
+    /* I suppose we might want to read the USTATUS register as well*/
+    /* Get the UIE bit out of the USTATUS register */
+    const bool uie = (riscv_csr_read(env, CSR_USTATUS) & MSTATUS_UIE) != 0;
 
     return !cpu->irq_pending && mie;
 }

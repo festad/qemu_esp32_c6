@@ -67,6 +67,9 @@ typedef struct EspRISCVCPU {
     void* mie_enabled_opaque;
 
     /* Should we add a 'uie_enabled_callback and uie_enabled_opaque as well?*/
+    /* Callback called when the interrupts are re-enabled */
+    EspIntEnableCallback uie_enabled_callback;
+    void* uie_enabled_opaque;
 
 
     /*< public >*/

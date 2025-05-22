@@ -160,17 +160,20 @@ typedef struct ESP32C6IntMatrixState {
     */
     uint64_t irq_enabled;
 
+    /* The "mode" property, not mentioned in the esp32c3*/
+    uint64_t irq_mode;
+
     /* Fast mirror to access IRQ levels */
     uint64_t irq_levels;
     EspRISCVCPU *cpu;
 
-    /* Output IRQ used to notify the CPU, indexed from 1 to 31, so allocate one more
+    /* Output IRQ used to notify the CPU, indexed from 0 to 31.
        In the ESP32C6 the available the non-core local input (CLINT) are
        1,2,5,6,8~31
        The CLINT interrupts are 
        0,3,4,7 
     */
-    qemu_irq out_irqs[ESP32C6_CPU_INT_MAX + 1];
+    qemu_irq out_irqs[ESP32C6_CPU_INT_MAX];
 } ESP32C6IntMatrixState;
 
 typedef enum {
